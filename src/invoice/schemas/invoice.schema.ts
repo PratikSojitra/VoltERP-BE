@@ -1,14 +1,15 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import * as mongoose from 'mongoose';
 import { Document, Types } from 'mongoose';
 import { Company } from '../../company/schemas/company.schema';
 import { Customer } from '../../customer/schemas/customer.schema';
 import { Product } from '../../product/schemas/product.schema';
 
 export class InvoiceItem {
-    @Prop({ type: Types.ObjectId, ref: 'Product', required: true })
+    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true })
     product: Types.ObjectId | Product;
 
-    @Prop({ type: Types.ObjectId, ref: 'Inventory' })
+    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Inventory' })
     inventory?: Types.ObjectId;
 
     @Prop({ required: true })
@@ -29,7 +30,7 @@ export class Invoice extends Document {
     @Prop({ required: true, unique: true })
     invoiceNumber: string;
 
-    @Prop({ type: Types.ObjectId, ref: 'Customer', required: true })
+    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true })
     customer: Types.ObjectId | Customer;
 
     @Prop({ type: [InvoiceItem], required: true })
@@ -63,7 +64,7 @@ export class Invoice extends Document {
     @Prop()
     dueDate: Date;
 
-    @Prop({ type: Types.ObjectId, ref: 'Company', required: true })
+    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true })
     company: Types.ObjectId | Company;
 
     @Prop()

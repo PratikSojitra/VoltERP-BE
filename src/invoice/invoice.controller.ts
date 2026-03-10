@@ -51,7 +51,7 @@ export class InvoiceController {
     @Get('next-number')
     @UseGuards(JwtAuthGuard)
     async getNextNumber(@Req() req: any, @Query('companyId') companyIdQuery?: string) {
-        let companyId = req.user.role === Role.COMPANY ? req.user.userId : (companyIdQuery || req.user.userId);
+        let companyId = req.user.role === Role.COMPANY ? req.user.userId : ((companyIdQuery === 'undefined' ? undefined : companyIdQuery) || req.user.userId);
         if (!companyId) {
             throw new ForbiddenException('Company ID is required to generate next invoice number.');
         }

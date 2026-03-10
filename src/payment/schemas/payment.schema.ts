@@ -1,4 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import * as mongoose from 'mongoose';
 import { Document, Types } from 'mongoose';
 import { Company } from '../../company/schemas/company.schema';
 import { Customer } from '../../customer/schemas/customer.schema';
@@ -6,10 +7,10 @@ import { Customer } from '../../customer/schemas/customer.schema';
 @Schema({ timestamps: true })
 export class Payment extends Document {
     // We'll link this to Invoice once the Invoice schema is created
-    @Prop({ type: Types.ObjectId, ref: 'Invoice', required: true })
+    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Invoice', required: true })
     invoice: Types.ObjectId | any;
 
-    @Prop({ type: Types.ObjectId, ref: 'Customer', required: true })
+    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true })
     customer: Types.ObjectId | Customer;
 
     @Prop({ required: true })
@@ -37,7 +38,7 @@ export class Payment extends Document {
     @Prop()
     notes: string;
 
-    @Prop({ type: Types.ObjectId, ref: 'Company', required: true })
+    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true })
     company: Types.ObjectId | Company;
 }
 

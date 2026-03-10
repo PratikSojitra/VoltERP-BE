@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Invoice } from './schemas/invoice.schema';
@@ -35,6 +35,11 @@ export class InvoiceService {
         // Auto-generate a sequential InvoiceNumber if missing
         if (!createInvoiceDto.invoiceNumber) {
             createInvoiceDto.invoiceNumber = await this.getNextInvoiceNumber(createInvoiceDto.company as string);
+        }
+
+        const existing = await this.invoiceModel.findOne({ invoiceNumber: createInvoiceDto.invoiceNumber }).exec();
+        if (existing) {
+            throw new ConflictException(`Invoice number ${createInvoiceDto.invoiceNumber} is already generated.`);
         }
 
         const createdInvoice = new this.invoiceModel(createInvoiceDto);
@@ -113,9 +118,10 @@ export class InvoiceService {
                 .find(filter)
                 .skip(skip)
                 .limit(limit)
-                .populate('customer')
-                .populate('company')
-                .populate('items.product')
+                .populate({ path: 'customer', model: 'Customer' })
+                .populate({ path: 'company', model: 'Company' })
+                .populate({ path: 'items.product', model: 'Product' })
+                .populate({ path: 'items.inventory', model: 'Inventory' })
                 .exec(),
             this.invoiceModel.countDocuments(filter).exec()
         ]);
@@ -126,9 +132,10 @@ export class InvoiceService {
     async findOne(id: string): Promise<Invoice> {
         const invoice = await this.invoiceModel
             .findById(id)
-            .populate('customer')
-            .populate('company')
-            .populate('items.product')
+            .populate({ path: 'customer', model: 'Customer' })
+            .populate({ path: 'company', model: 'Company' })
+            .populate({ path: 'items.product', model: 'Product' })
+            .populate({ path: 'items.inventory', model: 'Inventory' })
             .exec();
         if (!invoice) {
             throw new NotFoundException(`Invoice with ID "${id}" not found`);
@@ -140,6 +147,13 @@ export class InvoiceService {
         const existingInvoice = await this.invoiceModel.findById(id).exec();
         if (!existingInvoice) {
             throw new NotFoundException(`Invoice with ID "${id}" not found`);
+        }
+
+        if (updateInvoiceDto.invoiceNumber && updateInvoiceDto.invoiceNumber !== existingInvoice.invoiceNumber) {
+            const duplicate = await this.invoiceModel.findOne({ invoiceNumber: updateInvoiceDto.invoiceNumber }).exec();
+            if (duplicate) {
+                throw new ConflictException(`Invoice number ${updateInvoiceDto.invoiceNumber} is already generated.`);
+            }
         }
 
         // Recalculate status and outstanding if they send a patch adjusting amounts
