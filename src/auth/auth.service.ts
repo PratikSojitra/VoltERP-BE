@@ -37,4 +37,21 @@ export class AuthService {
             user,
         };
     }
+
+    async changePassword(userId: string, currentPassword: string, newPassword: string) {
+        const user = await this.companyService.findOne(userId);
+        
+        if (!user.password) {
+            throw new UnauthorizedException('User does not have a password set');
+        }
+
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        if (!isMatch) {
+            throw new UnauthorizedException('Invalid current password');
+        }
+
+        const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+        await this.companyService.update(userId, { password: hashedNewPassword } as any);
+        return { message: 'Password changed successfully' };
+    }
 }
