@@ -16,8 +16,22 @@ export class InventoryService {
         return createdInventory.save();
     }
 
-    async findAll(companyId?: string, page: number = 1, limit: number = 10) {
-        const filter = companyId ? { company: companyId } : {};
+    async findAll(companyId?: string, page: number = 1, limit: number = 10, search?: string, status?: string) {
+        let filter: any = companyId ? { company: companyId } : {};
+
+        if (status) {
+            filter.status = status;
+        }
+
+        if (search) {
+            filter.$or = [
+                { serialNumber: { $regex: search, $options: 'i' } }
+            ];
+            
+            if (!status) {
+                filter.$or.push({ status: { $regex: search, $options: 'i' } });
+            }
+        }
         const skip = (page - 1) * limit;
 
         const [data, total] = await Promise.all([

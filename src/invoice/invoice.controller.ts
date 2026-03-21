@@ -38,14 +38,16 @@ export class InvoiceController {
         @Req() req: any,
         @Query('page') page?: string,
         @Query('limit') limit?: string,
+        @Query('search') search?: string,
+        @Query('status') status?: string,
+        @Query('startDate') startDate?: string,
+        @Query('endDate') endDate?: string,
     ) {
         const pageNumber = page ? parseInt(page, 10) : 1;
         const limitNumber = limit ? parseInt(limit, 10) : 10;
-
-        if (req.user.role === Role.COMPANY) {
-            return this.invoiceService.findAll(req.user.userId, pageNumber, limitNumber);
-        }
-        return this.invoiceService.findAll(undefined, pageNumber, limitNumber);
+        
+        const companyId = req.user.role === Role.COMPANY ? req.user.userId : undefined;
+        return this.invoiceService.findAll(companyId, pageNumber, limitNumber, search, status, startDate, endDate);
     }
 
     @Get('next-number')

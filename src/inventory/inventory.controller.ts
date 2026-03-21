@@ -38,14 +38,14 @@ export class InventoryController {
         @Req() req: any,
         @Query('page') page?: string,
         @Query('limit') limit?: string,
+        @Query('search') search?: string,
+        @Query('status') status?: string,
     ) {
         const pageNumber = page ? parseInt(page, 10) : 1;
         const limitNumber = limit ? parseInt(limit, 10) : 10;
 
-        if (req.user.role === Role.COMPANY) {
-            return this.inventoryService.findAll(req.user.userId, pageNumber, limitNumber);
-        }
-        return this.inventoryService.findAll(undefined, pageNumber, limitNumber);
+        const companyId = req.user.role === Role.COMPANY ? req.user.userId : undefined;
+        return this.inventoryService.findAll(companyId, pageNumber, limitNumber, search, status);
     }
 
     @Get(':id')

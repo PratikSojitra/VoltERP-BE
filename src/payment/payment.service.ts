@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Payment } from './schemas/payment.schema';
 import { Invoice } from '../invoice/schemas/invoice.schema';
+import { Customer } from '../customer/schemas/customer.schema';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 
@@ -11,6 +12,7 @@ export class PaymentService {
     constructor(
         @InjectModel(Payment.name) private readonly paymentModel: Model<Payment>,
         @InjectModel(Invoice.name) private readonly invoiceModel: Model<Invoice>,
+        @InjectModel(Customer.name) private readonly customerModel: Model<Customer>,
     ) { }
 
     private async syncInvoice(invoiceId: string | Types.ObjectId) {
@@ -76,8 +78,58 @@ export class PaymentService {
         return saved;
     }
 
-    async findAll(companyId?: string, page: number = 1, limit: number = 10) {
-        const filter = companyId ? { company: companyId } : {};
+    async findAll(
+        companyId?: string, 
+        page: number = 1, 
+        limit: number = 10, 
+        search?: string,
+        status?: string,
+        startDate?: string,
+        endDate?: string
+    ) {
+        let filter: any = companyId ? { company: companyId } : {};
+
+        if (status) {
+            filter.status = status;
+        }
+
+        if (startDate || endDate) {
+            filter.paymentDate = {};
+            if (startDate) {
+                filter.paymentDate.$gte = new Date(startDate);
+            }
+            if (endDate) {
+                filter.paymentDate.$lte = new Date(endDate);
+            }
+        }
+
+        if (search) {
+            // Search for matching customers and invoices to filter by IDs
+            const [matchingCustomers, matchingInvoices] = await Promise.all([
+                this.customerModel.find({
+                    name: { $regex: search, $options: 'i' },
+                    ...(companyId ? { company: companyId } : {})
+                }).select('_id').exec(),
+                this.invoiceModel.find({
+                    invoiceNumber: { $regex: search, $options: 'i' },
+                    ...(companyId ? { company: companyId } : {})
+                }).select('_id').exec()
+            ]);
+
+            const customerIds = matchingCustomers.map(c => c._id);
+            const invoiceIds = matchingInvoices.map(i => i._id);
+
+            filter.$or = [
+                { referenceNumber: { $regex: search, $options: 'i' } },
+                { paymentMethod: { $regex: search, $options: 'i' } },
+                { customer: { $in: customerIds } },
+                { invoice: { $in: invoiceIds } }
+            ];
+            // Only add status to $or search if we aren't already specifically filtering by it
+            if (!status) {
+                filter.$or.push({ status: { $regex: search, $options: 'i' } });
+            }
+        }
         const skip = (page - 1) * limit;
 
         const [data, total] = await Promise.all([
@@ -87,6 +139,7 @@ export class PaymentService {
                 .limit(limit)
                 .populate('customer')
                 .populate('company')
+                .populate('invoice')
                 .exec(),
             this.paymentModel.countDocuments(filter).exec()
         ]);
@@ -99,6 +152,7 @@ export class PaymentService {
             .findById(id)
             .populate('customer')
             .populate('company')
+            .populate('invoice')
             .exec();
         if (!payment) {
             throw new NotFoundException(`Payment record with ID "${id}" not found`);

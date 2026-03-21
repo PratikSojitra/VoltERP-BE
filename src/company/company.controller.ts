@@ -32,6 +32,7 @@ export class CompanyController {
         @Req() req: any,
         @Query('page') page?: string,
         @Query('limit') limit?: string,
+        @Query('search') search?: string,
     ) {
         const pageNumber = page ? parseInt(page, 10) : 1;
         const limitNumber = limit ? parseInt(limit, 10) : 10;
@@ -39,7 +40,7 @@ export class CompanyController {
             const company = await this.companyService.findOne(req.user.userId);
             return { data: [company], total: 1, page: 1, limit: limitNumber, totalPages: 1 };
         }
-        return this.companyService.findAll(pageNumber, limitNumber);
+        return this.companyService.findAll(pageNumber, limitNumber, search);
     }
 
     @Get(':id')

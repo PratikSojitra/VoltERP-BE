@@ -38,14 +38,15 @@ export class CustomerController {
         @Req() req: any,
         @Query('page') page?: string,
         @Query('limit') limit?: string,
+        @Query('search') search?: string,
     ) {
         const pageNumber = page ? parseInt(page, 10) : 1;
         const limitNumber = limit ? parseInt(limit, 10) : 10;
 
         if (req.user.role === Role.COMPANY) {
-            return this.customerService.findAll(req.user.userId, pageNumber, limitNumber);
+            return this.customerService.findAll(req.user.userId, pageNumber, limitNumber, search);
         }
-        return this.customerService.findAll(undefined, pageNumber, limitNumber);
+        return this.customerService.findAll(undefined, pageNumber, limitNumber, search);
     }
 
     @Get(':id')

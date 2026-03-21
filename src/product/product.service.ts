@@ -16,8 +16,23 @@ export class ProductService {
         return createdProduct.save();
     }
 
-    async findAll(companyId?: string, page: number = 1, limit: number = 10) {
-        const filter = companyId ? { company: companyId } : {};
+    async findAll(companyId?: string, page: number = 1, limit: number = 10, search?: string, type?: string) {
+        let filter: any = companyId ? { company: companyId } : {};
+
+        if (type) {
+            filter.type = type;
+        }
+
+        if (search) {
+            filter.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { hsnCode: { $regex: search, $options: 'i' } }
+            ];
+            
+            if (!type) {
+                filter.$or.push({ type: { $regex: search, $options: 'i' } });
+            }
+        }
         const skip = (page - 1) * limit;
 
         const [data, total] = await Promise.all([

@@ -20,11 +20,20 @@ export class CompanyService {
         return createdCompany.save();
     }
 
-    async findAll(page: number = 1, limit: number = 10) {
+    async findAll(page: number = 1, limit: number = 10, search?: string) {
+        const query: any = {};
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } },
+                { industry: { $regex: search, $options: 'i' } }
+            ];
+        }
+
         const skip = (page - 1) * limit;
         const [data, total] = await Promise.all([
-            this.companyModel.find().skip(skip).limit(limit).select('-password').exec(),
-            this.companyModel.countDocuments().exec()
+            this.companyModel.find(query).skip(skip).limit(limit).select('-password').exec(),
+            this.companyModel.countDocuments(query).exec()
         ]);
         return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
     }

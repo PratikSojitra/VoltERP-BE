@@ -6,6 +6,7 @@ import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { Inventory } from '../inventory/schemas/inventory.schema';
 import { Payment } from '../payment/schemas/payment.schema';
+import { Customer } from '../customer/schemas/customer.schema';
 
 @Injectable()
 export class InvoiceService {
@@ -13,6 +14,7 @@ export class InvoiceService {
         @InjectModel(Invoice.name) private readonly invoiceModel: Model<Invoice>,
         @InjectModel(Inventory.name) private readonly inventoryModel: Model<Inventory>,
         @InjectModel(Payment.name) private readonly paymentModel: Model<Payment>,
+        @InjectModel(Customer.name) private readonly customerModel: Model<Customer>,
     ) { }
 
     async create(createInvoiceDto: CreateInvoiceDto): Promise<Invoice> {
@@ -109,13 +111,56 @@ export class InvoiceService {
         return `${nextSeq.toString().padStart(2, '0')}/${fy}`;
     }
 
-    async findAll(companyId?: string, page: number = 1, limit: number = 10) {
-        const filter = companyId ? { company: companyId } : {};
+    async findAll(
+        companyId?: string,
+        page: number = 1,
+        limit: number = 10,
+        search?: string,
+        status?: string,
+        startDate?: string,
+        endDate?: string
+    ) {
+        let filter: any = companyId ? { company: companyId } : {};
+
+        // 1. Specific status filter
+        if (status) {
+            filter.status = status;
+        }
+
+        // 2. Date range filter
+        if (startDate || endDate) {
+            filter.issueDate = {};
+            if (startDate) {
+                filter.issueDate.$gte = new Date(startDate);
+            }
+            if (endDate) {
+                filter.issueDate.$lte = new Date(endDate);
+            }
+        }
+
+        // 3. Search query
+        if (search) {
+            // Searching by Customer Name first to get matching customer IDs
+            const matchingCustomers = await this.customerModel.find({
+                name: { $regex: search, $options: 'i' },
+                ...(companyId ? { company: companyId } : {})
+            }).select('_id').exec();
+            
+            const customerIds = matchingCustomers.map(c => c._id);
+
+            filter.$or = [
+                { invoiceNumber: { $regex: search, $options: 'i' } },
+                { status: { $regex: search, $options: 'i' } },
+                { customer: { $in: customerIds } }
+            ];
+        }
+
         const skip = (page - 1) * limit;
 
         const [data, total] = await Promise.all([
             this.invoiceModel
                 .find(filter)
+                .sort({ issueDate: -1, createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
                 .populate({ path: 'customer', model: 'Customer' })
@@ -156,16 +201,17 @@ export class InvoiceService {
             }
         }
 
-        // Recalculate status and outstanding if they send a patch adjusting amounts
-        if (updateInvoiceDto.paidAmount !== undefined) {
+        // Always recalculate amounts if either changes
+        if (updateInvoiceDto.grandTotal !== undefined || updateInvoiceDto.paidAmount !== undefined || updateInvoiceDto.items !== undefined) {
             const grandTotal = updateInvoiceDto.grandTotal !== undefined ? updateInvoiceDto.grandTotal : existingInvoice.grandTotal;
-            const outstandingAmount = grandTotal - updateInvoiceDto.paidAmount;
+            const paidAmount = updateInvoiceDto.paidAmount !== undefined ? updateInvoiceDto.paidAmount : (existingInvoice.paidAmount || 0);
+            const outstandingAmount = grandTotal - paidAmount;
 
-            updateInvoiceDto.outstandingAmount = outstandingAmount;
+            updateInvoiceDto.outstandingAmount = outstandingAmount > 0 ? outstandingAmount : 0;
 
             if (outstandingAmount <= 0) {
                 updateInvoiceDto.status = 'PAID';
-            } else if (updateInvoiceDto.paidAmount > 0 && updateInvoiceDto.paidAmount < grandTotal) {
+            } else if (paidAmount > 0) {
                 updateInvoiceDto.status = 'PARTIAL';
             } else {
                 updateInvoiceDto.status = 'UNPAID';
@@ -178,6 +224,33 @@ export class InvoiceService {
 
         if (!updatedInvoice) {
             throw new NotFoundException(`Invoice with ID "${id}" not found`);
+        }
+
+        // Sync pending payment to reflect new outstanding balance properly
+        const pendingPayment = await this.paymentModel.findOne({
+            invoice: updatedInvoice._id,
+            status: 'PENDING'
+        });
+
+        if (updatedInvoice.outstandingAmount > 0) {
+            if (pendingPayment) {
+                pendingPayment.amount = updatedInvoice.outstandingAmount;
+                await pendingPayment.save();
+            } else {
+                const newPending = new this.paymentModel({
+                    invoice: updatedInvoice._id,
+                    customer: updatedInvoice.customer,
+                    company: updatedInvoice.company,
+                    amount: updatedInvoice.outstandingAmount,
+                    paymentDate: new Date(),
+                    paymentMethod: 'OTHER',
+                    status: 'PENDING',
+                    notes: 'Auto-updated pending balance due'
+                });
+                await newPending.save();
+            }
+        } else if (pendingPayment) {
+            await this.paymentModel.findByIdAndDelete(pendingPayment._id);
         }
 
         return updatedInvoice;

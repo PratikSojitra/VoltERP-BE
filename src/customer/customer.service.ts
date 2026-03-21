@@ -16,8 +16,15 @@ export class CustomerService {
         return createdCustomer.save();
     }
 
-    async findAll(companyId?: string, page: number = 1, limit: number = 10) {
-        const filter = companyId ? { company: companyId } : {};
+    async findAll(companyId?: string, page: number = 1, limit: number = 10, search?: string) {
+        const filter: any = companyId ? { company: companyId } : {};
+        if (search) {
+            filter.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } },
+                { phone: { $regex: search, $options: 'i' } }
+            ];
+        }
         const skip = (page - 1) * limit;
 
         const [data, total] = await Promise.all([
