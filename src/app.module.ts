@@ -12,6 +12,8 @@ import { PaymentModule } from './payment/payment.module';
 import { InvoiceModule } from './invoice/invoice.module';
 import { AuthModule } from './auth/auth.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { VendorModule } from './vendor/vendor.module';
+import { PurchaseModule } from './purchase/purchase.module';
 
 @Module({
   imports: [
@@ -34,6 +36,8 @@ import { DashboardModule } from './dashboard/dashboard.module';
     InvoiceModule,
     AuthModule,
     DashboardModule,
+    VendorModule,
+    PurchaseModule,
   ],
   controllers: [AppController],
   providers: [AppService],
