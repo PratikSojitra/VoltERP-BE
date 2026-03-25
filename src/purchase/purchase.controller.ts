@@ -56,19 +56,34 @@ export class PurchaseController {
 
     @Get(':id')
     @Roles(Role.ADMIN, Role.COMPANY)
-    findOne(@Param('id') id: string) {
-        return this.purchaseService.findOne(id);
+    async findOne(@Param('id') id: string, @Req() req: any) {
+        const purchase = await this.purchaseService.findOne(id);
+        const purchaseCompanyId = (purchase.company as any)._id ? (purchase.company as any)._id.toString() : purchase.company.toString();
+        if (req.user.role === Role.COMPANY && purchaseCompanyId !== req.user.userId) {
+            throw new ForbiddenException('You can only access your own purchases');
+        }
+        return purchase;
     }
 
     @Patch(':id')
     @Roles(Role.ADMIN, Role.COMPANY)
-    update(@Param('id') id: string, @Body() updatePurchaseDto: UpdatePurchaseDto) {
+    async update(@Param('id') id: string, @Body() updatePurchaseDto: UpdatePurchaseDto, @Req() req: any) {
+        const purchase = await this.purchaseService.findOne(id);
+        const purchaseCompanyId = (purchase.company as any)._id ? (purchase.company as any)._id.toString() : purchase.company.toString();
+        if (req.user.role === Role.COMPANY && purchaseCompanyId !== req.user.userId) {
+            throw new ForbiddenException('You can only update your own purchases');
+        }
         return this.purchaseService.update(id, updatePurchaseDto);
     }
 
     @Delete(':id')
     @Roles(Role.ADMIN, Role.COMPANY)
-    remove(@Param('id') id: string) {
+    async remove(@Param('id') id: string, @Req() req: any) {
+        const purchase = await this.purchaseService.findOne(id);
+        const purchaseCompanyId = (purchase.company as any)._id ? (purchase.company as any)._id.toString() : purchase.company.toString();
+        if (req.user.role === Role.COMPANY && purchaseCompanyId !== req.user.userId) {
+            throw new ForbiddenException('You can only delete your own purchases');
+        }
         return this.purchaseService.remove(id);
     }
 }

@@ -188,7 +188,7 @@ export class PurchaseService {
             }
         }
 
-        // Determine which ones to delete
+        // Determine which ones to delete (exist in DB but not in desired list)
         const itemsToDelete = existingInventoryItems.filter(item => !desiredSerialNumbers.has(item.serialNumber));
         for (const item of itemsToDelete) {
             if (item.status === 'SOLD') {
@@ -197,17 +197,13 @@ export class PurchaseService {
             await this.inventoryModel.findByIdAndDelete(item._id).exec();
         }
 
-        // Determine which ones to add
+        // Determine which ones to add (in desired list but not in DB)
         const existingSerialNumbers = new Set(existingInventoryItems.map(item => item.serialNumber));
         
         for (const item of purchase.items) {
             if (item.serialNumbers) {
                 for (const sn of item.serialNumbers) {
                     if (!existingSerialNumbers.has(sn)) {
-                        // Needs to create
-                        // We assume unitType is "Standard Unit" or we use a fallback if not provided on Product
-                        // If product gives us unitType we could use it, but Inventory schema requires it.
-                        // Let's default to "Standard Unit" or "Box".
                         const newInventory = new this.inventoryModel({
                             product: item.product,
                             serialNumber: sn,
@@ -217,6 +213,23 @@ export class PurchaseService {
                             company: purchase.company,
                         });
                         await newInventory.save();
+                    } else {
+                        // Optional: Update existing inventory item if product or unitType changed
+                        const existingItem = existingInventoryItems.find(i => i.serialNumber === sn);
+                        if (existingItem) {
+                            let updated = false;
+                            if (existingItem.product.toString() !== (item.product as any)._id?.toString() && existingItem.product.toString() !== item.product.toString()) {
+                                existingItem.product = item.product as any;
+                                updated = true;
+                            }
+                            if (existingItem.unitType !== item.unitType) {
+                                existingItem.unitType = item.unitType;
+                                updated = true;
+                            }
+                            if (updated) {
+                                await existingItem.save();
+                            }
+                        }
                     }
                 }
             }
