@@ -9,8 +9,8 @@ export class InvoiceItem {
     @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true })
     product: Types.ObjectId | Product;
 
-    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Inventory' })
-    inventory?: Types.ObjectId;
+    @Prop({ type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Inventory' }] })
+    inventory?: Types.ObjectId[];
 
     @Prop({ required: true })
     quantity: number;

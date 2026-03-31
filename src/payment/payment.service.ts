@@ -4,6 +4,8 @@ import { Model, Types } from 'mongoose';
 import { Payment } from './schemas/payment.schema';
 import { Invoice } from '../invoice/schemas/invoice.schema';
 import { Customer } from '../customer/schemas/customer.schema';
+import { Purchase } from '../purchase/schemas/purchase.schema';
+import { Vendor } from '../vendor/schemas/vendor.schema';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 
@@ -13,9 +15,13 @@ export class PaymentService {
         @InjectModel(Payment.name) private readonly paymentModel: Model<Payment>,
         @InjectModel(Invoice.name) private readonly invoiceModel: Model<Invoice>,
         @InjectModel(Customer.name) private readonly customerModel: Model<Customer>,
+        @InjectModel(Purchase.name) private readonly purchaseModel: Model<Purchase>,
+        @InjectModel(Vendor.name) private readonly vendorModel: Model<Vendor>,
     ) { }
 
     private async syncInvoice(invoiceId: string | Types.ObjectId) {
+        if (!invoiceId) return;
+
         // Compute total paid for this invoice from COMPLETED / PARTIAL payments
         const payments = await this.paymentModel.find({
             invoice: invoiceId,
@@ -61,6 +67,7 @@ export class PaymentService {
                     paymentDate: new Date(),
                     paymentMethod: 'OTHER',
                     status: 'PENDING',
+                    type: 'SALES',
                     notes: 'Auto-updated pending balance due'
                 });
                 await newPending.save();
@@ -71,10 +78,37 @@ export class PaymentService {
         }
     }
 
+    private async syncPurchase(purchaseId: string | Types.ObjectId) {
+        if (!purchaseId) return;
+
+        // Compute total paid for this purchase from COMPLETED / PARTIAL payments
+        const payments = await this.paymentModel.find({
+            purchase: purchaseId,
+            status: { $in: ['COMPLETED', 'PARTIAL'] }
+        });
+
+        const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+        const purchase = await this.purchaseModel.findById(purchaseId);
+
+        if (!purchase) return;
+
+        const outstandingAmount = purchase.grandTotal - totalPaid;
+
+        // Purchase status is simpler but we'll use it to track inventory usually.
+        // We'll update the paidAmount and outstandingAmount.
+        purchase.paidAmount = totalPaid;
+        purchase.outstandingAmount = outstandingAmount > 0 ? outstandingAmount : 0;
+        await purchase.save();
+    }
+
     async create(createPaymentDto: CreatePaymentDto): Promise<Payment> {
+        if (!createPaymentDto.type) {
+            createPaymentDto.type = createPaymentDto.purchase ? 'PURCHASE' : 'SALES';
+        }
         const createdPayment = new this.paymentModel(createPaymentDto);
         const saved = await createdPayment.save();
-        await this.syncInvoice(saved.invoice);
+        if (saved.invoice) await this.syncInvoice(saved.invoice);
+        if (saved.purchase) await this.syncPurchase(saved.purchase);
         return saved;
     }
 
@@ -85,12 +119,23 @@ export class PaymentService {
         search?: string,
         status?: string,
         startDate?: string,
-        endDate?: string
+        endDate?: string,
+        type?: string
     ) {
         let filter: any = companyId ? { company: companyId } : {};
 
         if (status) {
             filter.status = status;
+        }
+
+        if (type) {
+            if (type === 'SALES') {
+                // In MongoDB, { $in: ['SALES', null] } matches both explicitly null 
+                // and missing fields (legacy data).
+                filter.type = { $in: ['SALES', null] };
+            } else {
+                filter.type = type;
+            }
         }
 
         if (startDate || endDate) {
@@ -104,8 +149,8 @@ export class PaymentService {
         }
 
         if (search) {
-            // Search for matching customers and invoices to filter by IDs
-            const [matchingCustomers, matchingInvoices] = await Promise.all([
+            // Search for matching customers, vendors, invoices, and purchases
+            const [matchingCustomers, matchingInvoices, matchingVendors, matchingPurchases] = await Promise.all([
                 this.customerModel.find({
                     name: { $regex: search, $options: 'i' },
                     ...(companyId ? { company: companyId } : {})
@@ -113,17 +158,29 @@ export class PaymentService {
                 this.invoiceModel.find({
                     invoiceNumber: { $regex: search, $options: 'i' },
                     ...(companyId ? { company: companyId } : {})
+                }).select('_id').exec(),
+                this.vendorModel.find({
+                    name: { $regex: search, $options: 'i' },
+                    ...(companyId ? { company: companyId } : {})
+                }).select('_id').exec(),
+                this.purchaseModel.find({
+                    invoiceNumber: { $regex: search, $options: 'i' },
+                    ...(companyId ? { company: companyId } : {})
                 }).select('_id').exec()
             ]);
 
             const customerIds = matchingCustomers.map(c => c._id);
             const invoiceIds = matchingInvoices.map(i => i._id);
+            const vendorIds = matchingVendors.map(v => v._id);
+            const purchaseIds = matchingPurchases.map(p => p._id);
 
             filter.$or = [
                 { referenceNumber: { $regex: search, $options: 'i' } },
                 { paymentMethod: { $regex: search, $options: 'i' } },
                 { customer: { $in: customerIds } },
-                { invoice: { $in: invoiceIds } }
+                { invoice: { $in: invoiceIds } },
+                { vendor: { $in: vendorIds } },
+                { purchase: { $in: purchaseIds } }
             ];
             // Only add status to $or search if we aren't already specifically filtering by it
             if (!status) {
@@ -138,8 +195,11 @@ export class PaymentService {
                 .skip(skip)
                 .limit(limit)
                 .populate('customer')
+                .populate('vendor')
                 .populate('company')
                 .populate('invoice')
+                .populate('purchase')
+                .sort({ createdAt: -1 })
                 .exec(),
             this.paymentModel.countDocuments(filter).exec()
         ]);
@@ -151,8 +211,10 @@ export class PaymentService {
         const payment = await this.paymentModel
             .findById(id)
             .populate('customer')
+            .populate('vendor')
             .populate('company')
             .populate('invoice')
+            .populate('purchase')
             .exec();
         if (!payment) {
             throw new NotFoundException(`Payment record with ID "${id}" not found`);
@@ -168,7 +230,8 @@ export class PaymentService {
         if (!existingPayment) {
             throw new NotFoundException(`Payment record with ID "${id}" not found`);
         }
-        await this.syncInvoice(existingPayment.invoice);
+        if (existingPayment.invoice) await this.syncInvoice(existingPayment.invoice);
+        if (existingPayment.purchase) await this.syncPurchase(existingPayment.purchase);
         return existingPayment;
     }
 
@@ -177,7 +240,8 @@ export class PaymentService {
         if (!deletedPayment) {
             throw new NotFoundException(`Payment record with ID "${id}" not found`);
         }
-        await this.syncInvoice(deletedPayment.invoice);
+        if (deletedPayment.invoice) await this.syncInvoice(deletedPayment.invoice);
+        if (deletedPayment.purchase) await this.syncPurchase(deletedPayment.purchase);
         return deletedPayment;
     }
 }

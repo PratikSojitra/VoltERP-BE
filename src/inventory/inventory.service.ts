@@ -35,7 +35,7 @@ export class InventoryService {
         const skip = (page - 1) * limit;
 
         const [data, total] = await Promise.all([
-            this.inventoryModel.find(filter).skip(skip).limit(limit).populate('product').populate('company').exec(),
+            this.inventoryModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).populate('product').populate('company').exec(),
             this.inventoryModel.countDocuments(filter).exec()
         ]);
 

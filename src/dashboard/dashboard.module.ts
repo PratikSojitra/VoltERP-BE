@@ -7,6 +7,8 @@ import { Customer, CustomerSchema } from '../customer/schemas/customer.schema';
 import { Inventory, InventorySchema } from '../inventory/schemas/inventory.schema';
 import { Invoice, InvoiceSchema } from '../invoice/schemas/invoice.schema';
 import { Payment, PaymentSchema } from '../payment/schemas/payment.schema';
+import { Product, ProductSchema } from '../product/schemas/product.schema';
+import { Purchase, PurchaseSchema } from '../purchase/schemas/purchase.schema';
 
 @Module({
   imports: [
@@ -16,6 +18,8 @@ import { Payment, PaymentSchema } from '../payment/schemas/payment.schema';
       { name: Inventory.name, schema: InventorySchema },
       { name: Invoice.name, schema: InvoiceSchema },
       { name: Payment.name, schema: PaymentSchema },
+      { name: Product.name, schema: ProductSchema },
+      { name: Purchase.name, schema: PurchaseSchema },
     ]),
   ],
   controllers: [DashboardController],

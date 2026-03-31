@@ -7,11 +7,20 @@ import { Customer } from '../../customer/schemas/customer.schema';
 @Schema({ timestamps: true })
 export class Payment extends Document {
     // We'll link this to Invoice once the Invoice schema is created
-    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Invoice', required: true })
+    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Invoice', required: false })
     invoice: Types.ObjectId | any;
 
-    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true })
+    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Purchase', required: false })
+    purchase: Types.ObjectId | any;
+
+    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: false })
     customer: Types.ObjectId | Customer;
+
+    @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', required: false })
+    vendor: Types.ObjectId | any;
+
+    @Prop({ required: true, enum: ['SALES', 'PURCHASE'], default: 'SALES' })
+    type: string;
 
     @Prop({ required: true })
     amount: number;

@@ -5,12 +5,14 @@ import { Purchase } from './schemas/purchase.schema';
 import { CreatePurchaseDto } from './dto/create-purchase.dto';
 import { UpdatePurchaseDto } from './dto/update-purchase.dto';
 import { Inventory } from '../inventory/schemas/inventory.schema';
+import { Payment } from '../payment/schemas/payment.schema';
 
 @Injectable()
 export class PurchaseService {
     constructor(
         @InjectModel(Purchase.name) private readonly purchaseModel: Model<Purchase>,
         @InjectModel(Inventory.name) private readonly inventoryModel: Model<Inventory>,
+        @InjectModel(Payment.name) private readonly paymentModel: Model<Payment>,
     ) { }
 
     async create(createPurchaseDto: CreatePurchaseDto): Promise<Purchase> {
@@ -28,11 +30,38 @@ export class PurchaseService {
         // Validate items and serial numbers
         this.validateItems(createPurchaseDto.items, createPurchaseDto.status);
 
+        // By default, we assume it's unpaid unless user provides a complex workflow.
+        // But the user's prompt says "when we add Purchases record we need to create payment as invoice".
+        // Let's create an auto-payment if it's COMPLETED.
+        
         const createdPurchase = new this.purchaseModel(createPurchaseDto);
         const savedPurchase = await createdPurchase.save();
 
-        if (savedPurchase.status === 'COMPLETED') {
-            await this.syncInventoryForPurchase(savedPurchase);
+        if (savedPurchase.status !== 'CANCELLED') {
+            const isCompleted = savedPurchase.status === 'COMPLETED';
+            
+            if (isCompleted) {
+                await this.syncInventoryForPurchase(savedPurchase);
+            }
+            
+            // Create automatic payment record
+            const autoPayment = new this.paymentModel({
+                purchase: savedPurchase._id,
+                vendor: savedPurchase.vendor,
+                company: savedPurchase.company,
+                amount: savedPurchase.grandTotal,
+                paymentDate: savedPurchase.purchaseDate || new Date(),
+                paymentMethod: 'CASH', // Default
+                status: isCompleted ? 'COMPLETED' : 'PENDING',
+                type: 'PURCHASE',
+                referenceNumber: `AUTO-${savedPurchase.invoiceNumber}`,
+                notes: `Auto-generated payment record for purchase ${savedPurchase.invoiceNumber}`
+            });
+            await autoPayment.save();
+
+            savedPurchase.paidAmount = isCompleted ? savedPurchase.grandTotal : 0;
+            savedPurchase.outstandingAmount = isCompleted ? 0 : savedPurchase.grandTotal;
+            await savedPurchase.save();
         }
 
         return savedPurchase;
@@ -99,10 +128,28 @@ export class PurchaseService {
         if (updatedPurchase.status === 'COMPLETED') {
             await this.syncInventoryForPurchase(updatedPurchase);
         } else if (existingPurchase.status === 'COMPLETED' && updatedPurchase.status !== 'COMPLETED') {
-            // If changed from COMPLETED to PENDING/CANCELLED, should we delete inventory items?
-            // Only if they are not already SOLD.
             await this.removeInventoryForPurchase(id);
         }
+
+        // Sync with Payment record
+        const payment = await this.paymentModel.findOne({ purchase: id });
+        if (payment) {
+            payment.amount = updatedPurchase.grandTotal;
+            if (updatedPurchase.status === 'COMPLETED') {
+                payment.status = 'COMPLETED';
+            } else if (updatedPurchase.status === 'CANCELLED') {
+                payment.status = 'FAILED';
+            } else {
+                payment.status = 'PENDING';
+            }
+            await payment.save();
+        }
+
+        // Update paid/outstanding amounts on purchase
+        const isPaid = (payment && payment.status === 'COMPLETED');
+        updatedPurchase.paidAmount = isPaid ? updatedPurchase.grandTotal : 0;
+        updatedPurchase.outstandingAmount = isPaid ? 0 : updatedPurchase.grandTotal;
+        await updatedPurchase.save();
 
         return updatedPurchase as Purchase;
     }
@@ -114,6 +161,7 @@ export class PurchaseService {
         }
 
         await this.removeInventoryForPurchase(id);
+        await this.paymentModel.deleteMany({ purchase: id }).exec();
         await this.purchaseModel.findByIdAndDelete(id).exec();
         return existingPurchase;
     }

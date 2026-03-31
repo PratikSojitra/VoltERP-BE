@@ -50,7 +50,13 @@ export class InvoiceService {
         // 1. Mark selected inventories as SOLD
         if (createInvoiceDto.items && createInvoiceDto.items.length > 0) {
             for (const item of createInvoiceDto.items) {
-                if (item.inventory) {
+                if (item.inventory && Array.isArray(item.inventory) && item.inventory.length > 0) {
+                    await this.inventoryModel.updateMany(
+                        { _id: { $in: item.inventory } },
+                        { $set: { status: 'SOLD' } }
+                    ).exec();
+                } else if (item.inventory && !Array.isArray(item.inventory)) {
+                     // Backward compatibility for single ID
                     await this.inventoryModel.findByIdAndUpdate(item.inventory, { status: 'SOLD' }).exec();
                 }
             }

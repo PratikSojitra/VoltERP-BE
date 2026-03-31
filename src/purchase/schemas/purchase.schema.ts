@@ -53,6 +53,12 @@ export class Purchase extends Document {
     @Prop({ default: 0 })
     grandTotal: number;
 
+    @Prop({ default: 0 })
+    paidAmount: number;
+
+    @Prop({ default: 0 })
+    outstandingAmount: number;
+
     @Prop({ required: true, default: 'COMPLETED', enum: ['PENDING', 'COMPLETED', 'CANCELLED'] })
     status: string;
 

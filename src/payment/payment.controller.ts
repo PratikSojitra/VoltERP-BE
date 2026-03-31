@@ -42,12 +42,13 @@ export class PaymentController {
         @Query('status') status?: string,
         @Query('startDate') startDate?: string,
         @Query('endDate') endDate?: string,
+        @Query('type') type?: string,
     ) {
         const pageNumber = page ? parseInt(page, 10) : 1;
         const limitNumber = limit ? parseInt(limit, 10) : 10;
 
         const companyId = req.user.role === Role.COMPANY ? req.user.userId : undefined;
-        return this.paymentService.findAll(companyId, pageNumber, limitNumber, search, status, startDate, endDate);
+        return this.paymentService.findAll(companyId, pageNumber, limitNumber, search, status, startDate, endDate, type);
     }
 
     @Get(':id')

@@ -5,9 +5,10 @@ export class InvoiceItemDto {
     @IsMongoId()
     product: string;
 
-    @IsMongoId()
+    @IsArray()
+    @IsMongoId({ each: true })
     @IsOptional()
-    inventory?: string;
+    inventory?: string[];
 
     @IsNumber()
     quantity: number;

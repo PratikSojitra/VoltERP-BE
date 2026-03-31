@@ -1,11 +1,25 @@
 import { IsNumber, IsString, IsOptional, IsMongoId, IsEnum, IsDateString } from 'class-validator';
 
 export class CreatePaymentDto {
+    @IsOptional()
     @IsMongoId()
-    invoice: string;
+    invoice?: string;
 
+    @IsOptional()
     @IsMongoId()
-    customer: string;
+    purchase?: string;
+
+    @IsOptional()
+    @IsMongoId()
+    customer?: string;
+
+    @IsOptional()
+    @IsMongoId()
+    vendor?: string;
+
+    @IsOptional()
+    @IsEnum(['SALES', 'PURCHASE'])
+    type?: string;
 
     @IsNumber()
     amount: number;
