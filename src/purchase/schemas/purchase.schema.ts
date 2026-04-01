@@ -24,6 +24,9 @@ export class PurchaseItem {
     @Prop({ type: [String], default: [] })
     serialNumbers: string[];
 
+    @Prop({ type: [String], default: [] })
+    serialNumbersODU: string[];
+
     @Prop({ type: String, default: "Standard Unit" })
     unitType: string;
 }

@@ -20,6 +20,14 @@ import { UpdateInventoryDto } from './dto/update-inventory.dto';
 @Controller('inventory')
 export class InventoryController {
     constructor(private readonly inventoryService: InventoryService) { }
+    
+    @Get('grouped')
+    @UseGuards(JwtAuthGuard)
+    findGrouped(@Req() req: any) {
+        const companyId = req.user.role === Role.COMPANY ? req.user.userId : undefined;
+        return this.inventoryService.findGroupedByProduct(companyId);
+    }
+
 
     @Post()
     @UseGuards(JwtAuthGuard)

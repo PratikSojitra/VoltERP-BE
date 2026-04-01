@@ -27,6 +27,11 @@ export class PurchaseItemDto {
     @IsString({ each: true })
     @IsOptional()
     serialNumbers?: string[];
+
+    @IsArray()
+    @IsString({ each: true })
+    @IsOptional()
+    serialNumbersODU?: string[];
 }
 
 export class CreatePurchaseDto {

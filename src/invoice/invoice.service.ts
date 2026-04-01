@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Invoice } from './schemas/invoice.schema';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
@@ -232,6 +232,53 @@ export class InvoiceService {
             throw new NotFoundException(`Invoice with ID "${id}" not found`);
         }
 
+        // --- INVENTORY SYNCHRONIZATION ---
+        // 1. Get all inventory IDs currently associated with this invoice (post-update)
+        const newInventoryIds: string[] = [];
+        if (updatedInvoice.items) {
+            for (const item of updatedInvoice.items) {
+                if (item.inventory) {
+                    if (Array.isArray(item.inventory)) {
+                        newInventoryIds.push(...item.inventory.map(id => (id as any).toString()));
+                    } else {
+                        newInventoryIds.push((item.inventory as any).toString());
+                    }
+                }
+            }
+        }
+
+        // 2. Get all inventory IDs that WERE associated (pre-update)
+        const oldInventoryIds: string[] = [];
+        if (existingInvoice.items) {
+            for (const item of existingInvoice.items) {
+                if (item.inventory) {
+                    if (Array.isArray(item.inventory)) {
+                        oldInventoryIds.push(...item.inventory.map(id => (id as any).toString()));
+                    } else {
+                        oldInventoryIds.push((item.inventory as any).toString());
+                    }
+                }
+            }
+        }
+
+        // 3. Revert removed items to IN_STOCK
+        const removedIds = oldInventoryIds.filter(id => !newInventoryIds.includes(id));
+        if (removedIds.length > 0) {
+            await this.inventoryModel.updateMany(
+                { _id: { $in: removedIds } },
+                { $set: { status: 'IN_STOCK' } }
+            ).exec();
+        }
+
+        // 4. Mark newly added items as SOLD
+        const addedIds = newInventoryIds.filter(id => !oldInventoryIds.includes(id));
+        if (addedIds.length > 0) {
+            await this.inventoryModel.updateMany(
+                { _id: { $in: addedIds } },
+                { $set: { status: 'SOLD' } }
+            ).exec();
+        }
+
         // Sync pending payment to reflect new outstanding balance properly
         const pendingPayment = await this.paymentModel.findOne({
             invoice: updatedInvoice._id,
@@ -263,10 +310,38 @@ export class InvoiceService {
     }
 
     async remove(id: string): Promise<Invoice> {
-        const deletedInvoice = await this.invoiceModel.findByIdAndDelete(id).exec();
-        if (!deletedInvoice) {
+        const existingInvoice = await this.invoiceModel.findById(id).exec();
+        if (!existingInvoice) {
             throw new NotFoundException(`Invoice with ID "${id}" not found`);
         }
-        return deletedInvoice;
+
+        // 1. Revert inventory status to IN_STOCK
+        if (existingInvoice.items && existingInvoice.items.length > 0) {
+            const inventoryIds: any[] = [];
+            for (const item of existingInvoice.items) {
+                if (item.inventory) {
+                    if (Array.isArray(item.inventory)) {
+                        inventoryIds.push(...item.inventory);
+                    } else {
+                        inventoryIds.push(item.inventory);
+                    }
+                }
+            }
+
+            if (inventoryIds.length > 0) {
+                await this.inventoryModel.updateMany(
+                    { _id: { $in: inventoryIds } },
+                    { $set: { status: 'IN_STOCK' } }
+                ).exec();
+            }
+        }
+
+        // 2. Delete related payments
+        await this.paymentModel.deleteMany({ invoice: id }).exec();
+
+        // 3. Delete the invoice itself
+        await this.invoiceModel.findByIdAndDelete(id).exec();
+
+        return existingInvoice;
     }
 }

@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Inventory } from './schemas/inventory.schema';
 import { CreateInventoryDto } from './dto/create-inventory.dto';
 import { UpdateInventoryDto } from './dto/update-inventory.dto';
@@ -67,5 +67,50 @@ export class InventoryService {
             throw new NotFoundException(`Inventory record with ID "${id}" not found`);
         }
         return deletedInventory;
+    }
+    async findGroupedByProduct(companyId?: string) {
+        console.log('Grouping inventory for company:', companyId);
+        
+        // Fetch up to 5000 items (reasonable limit for grouping in JS)
+        const inventory = await this.findAll(companyId, 1, 5000);
+        const data = inventory.data || [];
+        
+        const groupedMap = new Map();
+        
+        data.forEach((item: any) => {
+            const product = item.product;
+            if (!product) return;
+            
+            const prodId = product._id?.toString() || product.toString();
+            
+            if (!groupedMap.has(prodId)) {
+                groupedMap.set(prodId, {
+                    product: product,
+                    count: 0,
+                    inStock: 0,
+                    sold: 0,
+                    defective: 0,
+                    serialNumbers: []
+                });
+            }
+            
+            const group = groupedMap.get(prodId);
+            group.count++;
+            
+            if (item.status === 'IN_STOCK' || item.status === 'AVAILABLE') group.inStock++;
+            else if (item.status === 'SOLD') group.sold++;
+            else if (item.status === 'DEFECTIVE') group.defective++;
+            
+            group.serialNumbers.push({
+                _id: item._id,
+                serialNumber: item.serialNumber,
+                status: item.status,
+                unitType: item.unitType
+            });
+        });
+        
+        return Array.from(groupedMap.values()).sort((a, b) => 
+            (a.product.name || '').localeCompare(b.product.name || '')
+        );
     }
 }

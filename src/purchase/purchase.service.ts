@@ -207,7 +207,14 @@ export class PurchaseService {
 
         for (const item of items) {
             if (status === 'COMPLETED') {
-                if (!item.serialNumbers || item.serialNumbers.length !== item.quantity) {
+                const hasODU = item.serialNumbersODU && item.serialNumbersODU.length > 0;
+                if (hasODU) {
+                    if (!item.serialNumbers || item.serialNumbers.length !== item.quantity || item.serialNumbersODU.length !== item.quantity) {
+                        throw new BadRequestException(
+                            `When providing both Indoor and Outdoor serials, you must provide exactly ${item.quantity} of each.`
+                        );
+                    }
+                } else if (!item.serialNumbers || item.serialNumbers.length !== item.quantity) {
                     throw new BadRequestException(
                         `When status is COMPLETED, you must provide exactly ${item.quantity} serial numbers for the given quantity.`
                     );
@@ -215,7 +222,12 @@ export class PurchaseService {
             } else {
                 if (item.serialNumbers && item.serialNumbers.length > item.quantity) {
                     throw new BadRequestException(
-                        `You cannot provide more serial numbers (${item.serialNumbers.length}) than the item quantity (${item.quantity}).`
+                        `You cannot provide more serial numbers than the item quantity.`
+                    );
+                }
+                if (item.serialNumbersODU && item.serialNumbersODU.length > item.quantity) {
+                    throw new BadRequestException(
+                        `You cannot provide more ODU serial numbers than the item quantity.`
                     );
                 }
             }
@@ -234,6 +246,11 @@ export class PurchaseService {
                     desiredSerialNumbers.add(sn);
                 }
             }
+            if (item.serialNumbersODU) {
+                for (const sn of item.serialNumbersODU) {
+                    desiredSerialNumbers.add(sn);
+                }
+            }
         }
 
         // Determine which ones to delete (exist in DB but not in desired list)
@@ -249,36 +266,51 @@ export class PurchaseService {
         const existingSerialNumbers = new Set(existingInventoryItems.map(item => item.serialNumber));
         
         for (const item of purchase.items) {
+            const hasODU = item.serialNumbersODU && item.serialNumbersODU.length > 0;
+            
+            // Handle regular serials (IDU if ODU exists)
             if (item.serialNumbers) {
                 for (const sn of item.serialNumbers) {
-                    if (!existingSerialNumbers.has(sn)) {
-                        const newInventory = new this.inventoryModel({
-                            product: item.product,
-                            serialNumber: sn,
-                            unitType: item.unitType || 'Standard Unit',
-                            status: 'IN_STOCK',
-                            purchase: purchase._id,
-                            company: purchase.company,
-                        });
-                        await newInventory.save();
-                    } else {
-                        // Optional: Update existing inventory item if product or unitType changed
-                        const existingItem = existingInventoryItems.find(i => i.serialNumber === sn);
-                        if (existingItem) {
-                            let updated = false;
-                            if (existingItem.product.toString() !== (item.product as any)._id?.toString() && existingItem.product.toString() !== item.product.toString()) {
-                                existingItem.product = item.product as any;
-                                updated = true;
-                            }
-                            if (existingItem.unitType !== item.unitType) {
-                                existingItem.unitType = item.unitType;
-                                updated = true;
-                            }
-                            if (updated) {
-                                await existingItem.save();
-                            }
-                        }
-                    }
+                    const unitType = hasODU ? "Indoor Unit (IDU)" : (item.unitType || 'Standard Unit');
+                    await this.upsertInventory(sn, item, unitType, purchase, existingInventoryItems, existingSerialNumbers);
+                }
+            }
+            
+            // Handle ODU serials
+            if (item.serialNumbersODU) {
+                for (const sn of item.serialNumbersODU) {
+                    const unitType = "Outdoor Unit (ODU)";
+                    await this.upsertInventory(sn, item, unitType, purchase, existingInventoryItems, existingSerialNumbers);
+                }
+            }
+        }
+    }
+
+    private async upsertInventory(sn: string, item: any, unitType: string, purchase: Purchase, existingInventoryItems: any[], existingSerialNumbers: Set<string>) {
+        if (!existingSerialNumbers.has(sn)) {
+            const newInventory = new this.inventoryModel({
+                product: item.product,
+                serialNumber: sn,
+                unitType: unitType,
+                status: 'IN_STOCK',
+                purchase: purchase._id,
+                company: purchase.company,
+            });
+            await newInventory.save();
+        } else {
+            const existingItem = existingInventoryItems.find(i => i.serialNumber === sn);
+            if (existingItem) {
+                let updated = false;
+                if (existingItem.product.toString() !== (item.product as any)._id?.toString() && existingItem.product.toString() !== item.product.toString()) {
+                    existingItem.product = item.product as any;
+                    updated = true;
+                }
+                if (existingItem.unitType !== unitType) {
+                    existingItem.unitType = unitType;
+                    updated = true;
+                }
+                if (updated) {
+                    await existingItem.save();
                 }
             }
         }
