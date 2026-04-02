@@ -25,7 +25,7 @@ export class DashboardService {
         const [customers, companies, inventory, invoices] = await Promise.all([
             this.customerModel.countDocuments(),
             this.companyModel.countDocuments(),
-            this.inventoryModel.countDocuments({ status: { $ne: 'SOLD' } }),
+            this.inventoryModel.countDocuments({ status: { $ne: 'SOLD' }, unitType: { $ne: 'Outdoor Unit (ODU)' } }),
             this.invoiceModel.find().select('grandTotal').lean()
         ]);
 
@@ -89,7 +89,7 @@ export class DashboardService {
         const [customersCount, invoiceData, inventoryCount, purchaseData, paymentsReport] = await Promise.all([
             this.customerModel.countDocuments(customerFilter),
             this.invoiceModel.find(invoiceFilter).select('grandTotal outstandingAmount status').lean(),
-            this.inventoryModel.countDocuments({ company: companyId, status: 'IN_STOCK' }),
+            this.inventoryModel.countDocuments({ company: companyId, status: 'IN_STOCK', unitType: { $ne: 'Outdoor Unit (ODU)' } }),
             this.purchaseModel.find(purchaseFilter).select('grandTotal outstandingAmount status').lean(),
             this.paymentModel.aggregate([
                 { $match: { 

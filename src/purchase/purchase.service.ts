@@ -21,6 +21,9 @@ export class PurchaseService {
             createPurchaseDto.invoiceNumber = await this.getNextPurchaseNumber(createPurchaseDto.company as string);
         }
 
+        // As per user request: Purchases are always COMPLETED by default at creation and update
+        createPurchaseDto.status = 'COMPLETED';
+
         // Duplicate check
         const existing = await this.purchaseModel.findOne({ invoiceNumber: createPurchaseDto.invoiceNumber }).exec();
         if (existing) {
@@ -44,7 +47,7 @@ export class PurchaseService {
                 await this.syncInventoryForPurchase(savedPurchase);
             }
             
-            // Create automatic payment record
+            // Create automatic payment record (always PENDING initially as per user request)
             const autoPayment = new this.paymentModel({
                 purchase: savedPurchase._id,
                 vendor: savedPurchase.vendor,
@@ -52,15 +55,16 @@ export class PurchaseService {
                 amount: savedPurchase.grandTotal,
                 paymentDate: savedPurchase.purchaseDate || new Date(),
                 paymentMethod: 'CASH', // Default
-                status: isCompleted ? 'COMPLETED' : 'PENDING',
+                status: 'PENDING',
                 type: 'PURCHASE',
                 referenceNumber: `AUTO-${savedPurchase.invoiceNumber}`,
                 notes: `Auto-generated payment record for purchase ${savedPurchase.invoiceNumber}`
             });
             await autoPayment.save();
 
-            savedPurchase.paidAmount = isCompleted ? savedPurchase.grandTotal : 0;
-            savedPurchase.outstandingAmount = isCompleted ? 0 : savedPurchase.grandTotal;
+            // Always start with 0 paid amount and full outstanding for new purchases (paid via separate payment workflow)
+            savedPurchase.paidAmount = 0;
+            savedPurchase.outstandingAmount = savedPurchase.grandTotal;
             await savedPurchase.save();
         }
 
@@ -117,6 +121,9 @@ export class PurchaseService {
             this.validateItems(updatePurchaseDto.items, updatePurchaseDto.status || existingPurchase.status);
         }
 
+        // Force COMPLETED status as per user request to simplify purchase tracking
+        updatePurchaseDto.status = 'COMPLETED';
+
         const updatedPurchase = await this.purchaseModel
             .findByIdAndUpdate(id, updatePurchaseDto, { new: true })
             .exec();
@@ -135,13 +142,11 @@ export class PurchaseService {
         const payment = await this.paymentModel.findOne({ purchase: id });
         if (payment) {
             payment.amount = updatedPurchase.grandTotal;
-            if (updatedPurchase.status === 'COMPLETED') {
-                payment.status = 'COMPLETED';
-            } else if (updatedPurchase.status === 'CANCELLED') {
+            if (updatedPurchase.status === 'CANCELLED') {
                 payment.status = 'FAILED';
-            } else {
-                payment.status = 'PENDING';
             }
+            // Decoupled payment status from purchase status as per user request. 
+            // Payment status should be managed separately or when actual payment is recorded.
             await payment.save();
         }
 

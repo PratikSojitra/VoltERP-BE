@@ -95,11 +95,17 @@ export class InventoryService {
             }
             
             const group = groupedMap.get(prodId);
-            group.count++;
             
-            if (item.status === 'IN_STOCK' || item.status === 'AVAILABLE') group.inStock++;
-            else if (item.status === 'SOLD') group.sold++;
-            else if (item.status === 'DEFECTIVE') group.defective++;
+            // To handle AC units (IDU + ODU) as a single stock piece, we only count the Indoor Unit or Standard Units.
+            // Outdoor Units (ODU) are tracked as serial numbers but not counted as separate stock units in the summary.
+            const isOdu = item.unitType === "Outdoor Unit (ODU)";
+            
+            if (!isOdu) {
+                group.count++;
+                if (item.status === 'IN_STOCK' || item.status === 'AVAILABLE') group.inStock++;
+                else if (item.status === 'SOLD') group.sold++;
+                else if (item.status === 'DEFECTIVE') group.defective++;
+            }
             
             group.serialNumbers.push({
                 _id: item._id,
