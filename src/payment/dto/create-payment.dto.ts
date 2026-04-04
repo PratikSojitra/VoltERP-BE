@@ -1,20 +1,25 @@
 import { IsNumber, IsString, IsOptional, IsMongoId, IsEnum, IsDateString } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreatePaymentDto {
     @IsOptional()
     @IsMongoId()
+    @Transform(({ value }) => value === '' ? undefined : value)
     invoice?: string;
 
     @IsOptional()
     @IsMongoId()
+    @Transform(({ value }) => value === '' ? undefined : value)
     purchase?: string;
 
     @IsOptional()
     @IsMongoId()
+    @Transform(({ value }) => value === '' ? undefined : value)
     customer?: string;
 
     @IsOptional()
     @IsMongoId()
+    @Transform(({ value }) => value === '' ? undefined : value)
     vendor?: string;
 
     @IsOptional()
