@@ -334,6 +334,20 @@ export class PurchaseService {
             const newSn = remainingDesired.shift();
             
             if (record.serialNumber !== newSn) {
+                // If the serial number is being changed, check if the record is truly SOLD
+                if (record.status === 'SOLD') {
+                    const isReferenced = await this.invoiceModel.findOne({ 
+                        'items.inventory': record._id 
+                    }).exec();
+                    
+                    if (isReferenced) {
+                        throw new BadRequestException(
+                            `Cannot edit serial number ${record.serialNumber} because it is already SOLD in Invoice ${isReferenced.invoiceNumber}`
+                        );
+                    }
+                    // If it was marked SOLD but not in an invoice, we allow update and reset status
+                    record.status = 'IN_STOCK';
+                }
                 record.serialNumber = newSn;
                 await record.save();
             }
@@ -363,7 +377,15 @@ export class PurchaseService {
         const existingInventoryItems = await this.inventoryModel.find({ purchase: purchaseId }).exec();
         for (const item of existingInventoryItems) {
             if (item.status === 'SOLD') {
-                throw new BadRequestException(`Cannot delete purchase, serial number ${item.serialNumber} is already SOLD`);
+                const isReferenced = await this.invoiceModel.findOne({ 
+                    'items.inventory': item._id 
+                }).exec();
+                
+                if (isReferenced) {
+                    throw new BadRequestException(
+                        `Cannot delete purchase, serial number ${item.serialNumber} is already SOLD in Invoice ${isReferenced.invoiceNumber}`
+                    );
+                }
             }
             await this.inventoryModel.findByIdAndDelete(item._id).exec();
         }
