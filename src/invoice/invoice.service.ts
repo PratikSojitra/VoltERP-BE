@@ -39,7 +39,10 @@ export class InvoiceService {
             createInvoiceDto.invoiceNumber = await this.getNextInvoiceNumber(createInvoiceDto.company as string);
         }
 
-        const existing = await this.invoiceModel.findOne({ invoiceNumber: createInvoiceDto.invoiceNumber }).exec();
+        const existing = await this.invoiceModel.findOne({ 
+            invoiceNumber: createInvoiceDto.invoiceNumber,
+            company: createInvoiceDto.company 
+        }).exec();
         if (existing) {
             throw new ConflictException(`Invoice number ${createInvoiceDto.invoiceNumber} is already generated.`);
         }
@@ -201,7 +204,10 @@ export class InvoiceService {
         }
 
         if (updateInvoiceDto.invoiceNumber && updateInvoiceDto.invoiceNumber !== existingInvoice.invoiceNumber) {
-            const duplicate = await this.invoiceModel.findOne({ invoiceNumber: updateInvoiceDto.invoiceNumber }).exec();
+            const duplicate = await this.invoiceModel.findOne({ 
+                invoiceNumber: updateInvoiceDto.invoiceNumber,
+                company: existingInvoice.company
+            }).exec();
             if (duplicate) {
                 throw new ConflictException(`Invoice number ${updateInvoiceDto.invoiceNumber} is already generated.`);
             }

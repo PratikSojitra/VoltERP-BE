@@ -6,6 +6,7 @@ import { CreatePurchaseDto } from './dto/create-purchase.dto';
 import { UpdatePurchaseDto } from './dto/update-purchase.dto';
 import { Inventory } from '../inventory/schemas/inventory.schema';
 import { Payment } from '../payment/schemas/payment.schema';
+import { Invoice } from '../invoice/schemas/invoice.schema';
 
 @Injectable()
 export class PurchaseService {
@@ -13,6 +14,7 @@ export class PurchaseService {
         @InjectModel(Purchase.name) private readonly purchaseModel: Model<Purchase>,
         @InjectModel(Inventory.name) private readonly inventoryModel: Model<Inventory>,
         @InjectModel(Payment.name) private readonly paymentModel: Model<Payment>,
+        @InjectModel(Invoice.name) private readonly invoiceModel: Model<Invoice>,
     ) { }
 
     async create(createPurchaseDto: CreatePurchaseDto): Promise<Purchase> {
@@ -25,7 +27,10 @@ export class PurchaseService {
         createPurchaseDto.status = 'COMPLETED';
 
         // Duplicate check
-        const existing = await this.purchaseModel.findOne({ invoiceNumber: createPurchaseDto.invoiceNumber }).exec();
+        const existing = await this.purchaseModel.findOne({ 
+            invoiceNumber: createPurchaseDto.invoiceNumber,
+            company: createPurchaseDto.company
+        }).exec();
         if (existing) {
             throw new ConflictException(`Purchase number ${createPurchaseDto.invoiceNumber} already exists.`);
         }
@@ -114,6 +119,17 @@ export class PurchaseService {
         const existingPurchase = await this.purchaseModel.findById(id).exec();
         if (!existingPurchase) {
             throw new NotFoundException(`Purchase with ID "${id}" not found`);
+        }
+
+        // Duplicate check if invoiceNumber is changed
+        if (updatePurchaseDto.invoiceNumber && updatePurchaseDto.invoiceNumber !== existingPurchase.invoiceNumber) {
+            const duplicate = await this.purchaseModel.findOne({ 
+                invoiceNumber: updatePurchaseDto.invoiceNumber,
+                company: existingPurchase.company
+            }).exec();
+            if (duplicate) {
+                throw new ConflictException(`Purchase number ${updatePurchaseDto.invoiceNumber} is already generated.`);
+            }
         }
 
         // Validate items if provided
@@ -240,61 +256,97 @@ export class PurchaseService {
     }
 
     private async syncInventoryForPurchase(purchase: Purchase) {
-        // Find existing inventory items for this purchase
+        // Find all existing inventory items for this purchase
         const existingInventoryItems = await this.inventoryModel.find({ purchase: purchase._id }).exec();
-        
-        // Build a list of all serial numbers that SHOULD exist
-        const desiredSerialNumbers = new Set<string>();
-        for (const item of purchase.items) {
-            if (item.serialNumbers) {
-                for (const sn of item.serialNumbers) {
-                    desiredSerialNumbers.add(sn);
-                }
-            }
-            if (item.serialNumbersODU) {
-                for (const sn of item.serialNumbersODU) {
-                    desiredSerialNumbers.add(sn);
-                }
-            }
-        }
+        const workingCopy = [...existingInventoryItems];
 
-        // Determine which ones to delete (exist in DB but not in desired list)
-        const itemsToDelete = existingInventoryItems.filter(item => !desiredSerialNumbers.has(item.serialNumber));
-        for (const item of itemsToDelete) {
-            if (item.status === 'SOLD') {
-                throw new BadRequestException(`Cannot remove serial number ${item.serialNumber} because it is already SOLD`);
-            }
-            await this.inventoryModel.findByIdAndDelete(item._id).exec();
-        }
-
-        // Determine which ones to add (in desired list but not in DB)
-        const existingSerialNumbers = new Set(existingInventoryItems.map(item => item.serialNumber));
-        
         for (const item of purchase.items) {
             const hasODU = item.serialNumbersODU && item.serialNumbersODU.length > 0;
             
-            // Handle regular serials (IDU if ODU exists)
-            if (item.serialNumbers) {
-                for (const sn of item.serialNumbers) {
-                    const unitType = hasODU ? "Indoor Unit (IDU)" : (item.unitType || 'Standard Unit');
-                    await this.upsertInventory(sn, item, unitType, purchase, existingInventoryItems, existingSerialNumbers);
-                }
-            }
+            // 1. Process standard/IDU serials
+            const iduUnitType = hasODU ? "Indoor Unit (IDU)" : (item.unitType || 'Standard Unit');
+            const iduSerials = item.serialNumbers || [];
+            await this.syncItemGroup(item.product, iduUnitType, iduSerials, purchase, workingCopy);
             
-            // Handle ODU serials
-            if (item.serialNumbersODU) {
-                for (const sn of item.serialNumbersODU) {
-                    const unitType = "Outdoor Unit (ODU)";
-                    await this.upsertInventory(sn, item, unitType, purchase, existingInventoryItems, existingSerialNumbers);
+            // 2. Process ODU serials if any
+            if (hasODU) {
+                const oduSerials = item.serialNumbersODU || [];
+                await this.syncItemGroup(item.product, "Outdoor Unit (ODU)", oduSerials, purchase, workingCopy);
+            }
+        }
+
+        // 3. Any leftover existing inventory items that weren't matched should be deleted
+        for (const leftover of workingCopy) {
+            if (leftover.status === 'SOLD') {
+                // Double check if it's actually referenced by an invoice
+                const isReferenced = await this.invoiceModel.findOne({ 
+                    'items.inventory': leftover._id 
+                }).exec();
+                
+                if (isReferenced) {
+                    throw new BadRequestException(
+                        `Cannot remove serial number ${leftover.serialNumber} because it is already SOLD in Invoice ${isReferenced.invoiceNumber}`
+                    );
                 }
             }
+            await this.inventoryModel.findByIdAndDelete(leftover._id).exec();
         }
     }
 
-    private async upsertInventory(sn: string, item: any, unitType: string, purchase: Purchase, existingInventoryItems: any[], existingSerialNumbers: Set<string>) {
-        if (!existingSerialNumbers.has(sn)) {
+    private async syncItemGroup(productId: any, unitType: string, desiredSerials: string[], purchase: Purchase, workingCopy: any[]) {
+        const prodIdStr = productId._id ? productId._id.toString() : productId.toString();
+        
+        // 1. Get all existing records for this group that are still in workingCopy
+        const matches = workingCopy.filter(i => 
+            i.product.toString() === prodIdStr && 
+            i.unitType === unitType
+        );
+
+        const remainingDesired = [...desiredSerials];
+        const processedRecords = new Set<string>();
+
+        // 2. First Pass: Match exact serial numbers to preserve identity and status
+        // Sort matches to prioritize SOLD items so we don't accidentally try to delete them if duplicates exist
+        const sortedMatches = [...matches].sort((a, b) => (a.status === 'SOLD' ? -1 : 1));
+
+        for (let i = remainingDesired.length - 1; i >= 0; i--) {
+            const sn = remainingDesired[i];
+            const foundIdx = sortedMatches.findIndex(m => m.serialNumber === sn && !processedRecords.has(m._id.toString()));
+            
+            if (foundIdx > -1) {
+                const record = sortedMatches[foundIdx];
+                processedRecords.add(record._id.toString());
+                remainingDesired.splice(i, 1);
+                
+                // Remove from the original matches array
+                const mIdx = matches.findIndex(m => m._id.toString() === record._id.toString());
+                if (mIdx > -1) matches.splice(mIdx, 1);
+                
+                // Remove from workingCopy as it's fully matched
+                const wcIdx = workingCopy.findIndex(wc => wc._id.toString() === record._id.toString());
+                if (wcIdx > -1) workingCopy.splice(wcIdx, 1);
+            }
+        }
+
+        // 3. Second Pass: Update remaining matches with remaining desired serials
+        while (matches.length > 0 && remainingDesired.length > 0) {
+            const record = matches.shift();
+            const newSn = remainingDesired.shift();
+            
+            if (record.serialNumber !== newSn) {
+                record.serialNumber = newSn;
+                await record.save();
+            }
+            
+            // Remove from workingCopy
+            const wcIdx = workingCopy.findIndex(wc => wc._id.toString() === record._id.toString());
+            if (wcIdx > -1) workingCopy.splice(wcIdx, 1);
+        }
+
+        // 4. Third Pass: Create new records for leftover desired serials
+        for (const sn of remainingDesired) {
             const newInventory = new this.inventoryModel({
-                product: item.product,
+                product: productId,
                 serialNumber: sn,
                 unitType: unitType,
                 status: 'IN_STOCK',
@@ -302,23 +354,9 @@ export class PurchaseService {
                 company: purchase.company,
             });
             await newInventory.save();
-        } else {
-            const existingItem = existingInventoryItems.find(i => i.serialNumber === sn);
-            if (existingItem) {
-                let updated = false;
-                if (existingItem.product.toString() !== (item.product as any)._id?.toString() && existingItem.product.toString() !== item.product.toString()) {
-                    existingItem.product = item.product as any;
-                    updated = true;
-                }
-                if (existingItem.unitType !== unitType) {
-                    existingItem.unitType = unitType;
-                    updated = true;
-                }
-                if (updated) {
-                    await existingItem.save();
-                }
-            }
         }
+
+        // 5. Leftover items in 'matches' remain in 'workingCopy' and will be deleted in the cleanup loop
     }
 
     private async removeInventoryForPurchase(purchaseId: string) {

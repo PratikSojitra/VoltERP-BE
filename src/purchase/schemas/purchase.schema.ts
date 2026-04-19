@@ -35,7 +35,7 @@ export const PurchaseItemSchema = SchemaFactory.createForClass(PurchaseItem);
 
 @Schema({ timestamps: true })
 export class Purchase extends Document {
-    @Prop({ required: true, unique: true })
+    @Prop({ required: true })
     invoiceNumber: string;
 
     @Prop({ type: Types.ObjectId, ref: 'Vendor', required: true })
@@ -73,3 +73,4 @@ export class Purchase extends Document {
 }
 
 export const PurchaseSchema = SchemaFactory.createForClass(Purchase);
+PurchaseSchema.index({ invoiceNumber: 1, company: 1 }, { unique: true });

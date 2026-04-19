@@ -27,7 +27,7 @@ export class InvoiceItem {
 
 @Schema({ timestamps: true })
 export class Invoice extends Document {
-    @Prop({ required: true, unique: true })
+    @Prop({ required: true })
     invoiceNumber: string;
 
     @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true })
@@ -84,3 +84,4 @@ export class Invoice extends Document {
 }
 
 export const InvoiceSchema = SchemaFactory.createForClass(Invoice);
+InvoiceSchema.index({ invoiceNumber: 1, company: 1 }, { unique: true });
