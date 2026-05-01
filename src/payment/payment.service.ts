@@ -105,6 +105,31 @@ export class PaymentService {
         if (!createPaymentDto.type) {
             createPaymentDto.type = createPaymentDto.purchase ? 'PURCHASE' : 'SALES';
         }
+
+        const amount = createPaymentDto.amount;
+        const status = createPaymentDto.status;
+        const invoiceId = createPaymentDto.invoice;
+        const purchaseId = createPaymentDto.purchase;
+
+        if (amount && amount > 0 && (status === 'COMPLETED' || status === 'PARTIAL')) {
+            let outstanding = 0;
+            if (invoiceId) {
+                const invoice = await this.invoiceModel.findById(invoiceId);
+                if (invoice) outstanding = invoice.outstandingAmount || 0;
+            } else if (purchaseId) {
+                const purchase = await this.purchaseModel.findById(purchaseId);
+                if (purchase) outstanding = purchase.outstandingAmount || 0;
+            }
+
+            if (outstanding > 0) {
+                if (amount < outstanding) {
+                    createPaymentDto.status = 'PARTIAL';
+                } else if (amount >= outstanding) {
+                    createPaymentDto.status = 'COMPLETED';
+                }
+            }
+        }
+
         const createdPayment = new this.paymentModel(createPaymentDto);
         const saved = await createdPayment.save();
         if (saved.invoice) await this.syncInvoice(saved.invoice);
@@ -223,16 +248,52 @@ export class PaymentService {
     }
 
     async update(id: string, updatePaymentDto: UpdatePaymentDto): Promise<Payment> {
-        const existingPayment = await this.paymentModel
-            .findByIdAndUpdate(id, updatePaymentDto, { new: true })
-            .exec();
-
+        const existingPayment = await this.paymentModel.findById(id);
         if (!existingPayment) {
             throw new NotFoundException(`Payment record with ID "${id}" not found`);
         }
-        if (existingPayment.invoice) await this.syncInvoice(existingPayment.invoice);
-        if (existingPayment.purchase) await this.syncPurchase(existingPayment.purchase);
-        return existingPayment;
+
+        const amount = updatePaymentDto.amount !== undefined ? updatePaymentDto.amount : existingPayment.amount;
+        const status = updatePaymentDto.status || existingPayment.status;
+        const invoiceId = updatePaymentDto.invoice || existingPayment.invoice;
+        const purchaseId = updatePaymentDto.purchase || existingPayment.purchase;
+
+        if (amount > 0 && (status === 'COMPLETED' || status === 'PARTIAL')) {
+            let outstanding = 0;
+            if (invoiceId) {
+                const invoice = await this.invoiceModel.findById(invoiceId);
+                if (invoice) {
+                    outstanding = invoice.outstandingAmount || 0;
+                    if (existingPayment.status === 'COMPLETED' || existingPayment.status === 'PARTIAL') {
+                        outstanding += existingPayment.amount;
+                    }
+                }
+            } else if (purchaseId) {
+                const purchase = await this.purchaseModel.findById(purchaseId);
+                if (purchase) {
+                    outstanding = purchase.outstandingAmount || 0;
+                    if (existingPayment.status === 'COMPLETED' || existingPayment.status === 'PARTIAL') {
+                        outstanding += existingPayment.amount;
+                    }
+                }
+            }
+
+            if (outstanding > 0) {
+                if (amount < outstanding) updatePaymentDto.status = 'PARTIAL';
+                else if (amount >= outstanding) updatePaymentDto.status = 'COMPLETED';
+            }
+        }
+
+        const updatedPayment = await this.paymentModel
+            .findByIdAndUpdate(id, updatePaymentDto, { new: true })
+            .exec();
+
+        // Note: existingPayment variable used above might be stale after findByIdAndUpdate, 
+        // but sync functions use updatedPayment references correctly.
+        if (updatedPayment && updatedPayment.invoice) await this.syncInvoice(updatedPayment.invoice);
+        if (updatedPayment && updatedPayment.purchase) await this.syncPurchase(updatedPayment.purchase);
+        
+        return updatedPayment!;
     }
 
     async remove(id: string): Promise<Payment> {
