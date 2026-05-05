@@ -7,6 +7,7 @@ import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { Inventory } from '../inventory/schemas/inventory.schema';
 import { Payment } from '../payment/schemas/payment.schema';
 import { Customer } from '../customer/schemas/customer.schema';
+import { Product } from '../product/schemas/product.schema';
 
 @Injectable()
 export class InvoiceService {
@@ -15,6 +16,7 @@ export class InvoiceService {
         @InjectModel(Inventory.name) private readonly inventoryModel: Model<Inventory>,
         @InjectModel(Payment.name) private readonly paymentModel: Model<Payment>,
         @InjectModel(Customer.name) private readonly customerModel: Model<Customer>,
+        @InjectModel(Product.name) private readonly productModel: Model<Product>,
     ) { }
 
     async create(createInvoiceDto: CreateInvoiceDto): Promise<Invoice> {
@@ -65,20 +67,31 @@ export class InvoiceService {
             }
         }
 
-        // 2. Create pending payment entry
-        if (savedInvoice.outstandingAmount > 0) {
-            const pendingPayment = new this.paymentModel({
-                invoice: savedInvoice._id,
-                customer: savedInvoice.customer,
-                company: savedInvoice.company,
-                amount: savedInvoice.outstandingAmount,
-                paymentMethod: 'OTHER', // Default placeholder 
+        // 2. Create base payment entry
+        const history: any[] = [];
+        const initialPaid = createInvoiceDto.paidAmount || 0;
+        
+        if (initialPaid > 0) {
+            history.push({
+                amount: initialPaid,
                 paymentDate: new Date(),
-                status: 'PENDING',
-                notes: 'Auto-generated invoice payment entry',
+                paymentMethod: 'OTHER',
+                notes: 'Initial payment received upon invoice creation'
             });
-            await pendingPayment.save();
         }
+
+        const basePayment = new this.paymentModel({
+            invoice: savedInvoice._id,
+            customer: savedInvoice.customer,
+            company: savedInvoice.company,
+            amount: initialPaid,
+            paymentMethod: 'OTHER',
+            paymentDate: new Date(),
+            status: savedInvoice.status === 'PAID' ? 'COMPLETED' : (initialPaid > 0 ? 'PARTIAL' : 'PENDING'),
+            notes: 'Invoice payment record',
+            history
+        });
+        await basePayment.save();
 
         return savedInvoice;
     }
@@ -149,18 +162,46 @@ export class InvoiceService {
 
         // 3. Search query
         if (search) {
-            // Searching by Customer Name first to get matching customer IDs
+            const searchRegex = { $regex: search, $options: 'i' };
+            const companyFilter = companyId ? { company: companyId } : {};
+
+            // Searching by Customer Name
             const matchingCustomers = await this.customerModel.find({
-                name: { $regex: search, $options: 'i' },
-                ...(companyId ? { company: companyId } : {})
+                name: searchRegex,
+                ...companyFilter
             }).select('_id').exec();
             
-            const customerIds = matchingCustomers.map(c => c._id);
+            // Searching by Product Name
+            const matchingProducts = await this.productModel.find({
+                name: searchRegex,
+                ...companyFilter
+            }).select('_id').exec();
+
+            // Searching by Serial Number (Inventory)
+            const matchingInventory = await this.inventoryModel.find({
+                serialNumber: searchRegex,
+                ...companyFilter
+            }).select('_id').exec();
+
+            const customerIds = [
+                ...matchingCustomers.map(c => c._id.toString()),
+                ...matchingCustomers.map(c => new Types.ObjectId(c._id))
+            ];
+            const productIds = [
+                ...matchingProducts.map(p => p._id.toString()),
+                ...matchingProducts.map(p => new Types.ObjectId(p._id))
+            ];
+            const inventoryIds = [
+                ...matchingInventory.map(i => i._id.toString()),
+                ...matchingInventory.map(i => new Types.ObjectId(i._id))
+            ];
 
             filter.$or = [
-                { invoiceNumber: { $regex: search, $options: 'i' } },
-                { status: { $regex: search, $options: 'i' } },
-                { customer: { $in: customerIds } }
+                { invoiceNumber: searchRegex },
+                { status: searchRegex },
+                { customer: { $in: customerIds } },
+                { 'items.product': { $in: productIds } },
+                { 'items.inventory': { $in: inventoryIds } }
             ];
         }
 

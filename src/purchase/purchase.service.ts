@@ -1,12 +1,14 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Purchase } from './schemas/purchase.schema';
 import { CreatePurchaseDto } from './dto/create-purchase.dto';
 import { UpdatePurchaseDto } from './dto/update-purchase.dto';
 import { Inventory } from '../inventory/schemas/inventory.schema';
 import { Payment } from '../payment/schemas/payment.schema';
 import { Invoice } from '../invoice/schemas/invoice.schema';
+import { Product } from '../product/schemas/product.schema';
+import { Vendor } from '../vendor/schemas/vendor.schema';
 
 @Injectable()
 export class PurchaseService {
@@ -15,6 +17,8 @@ export class PurchaseService {
         @InjectModel(Inventory.name) private readonly inventoryModel: Model<Inventory>,
         @InjectModel(Payment.name) private readonly paymentModel: Model<Payment>,
         @InjectModel(Invoice.name) private readonly invoiceModel: Model<Invoice>,
+        @InjectModel(Product.name) private readonly productModel: Model<Product>,
+        @InjectModel(Vendor.name) private readonly vendorModel: Model<Vendor>,
     ) { }
 
     async create(createPurchaseDto: CreatePurchaseDto): Promise<Purchase> {
@@ -57,13 +61,14 @@ export class PurchaseService {
                 purchase: savedPurchase._id,
                 vendor: savedPurchase.vendor,
                 company: savedPurchase.company,
-                amount: savedPurchase.grandTotal,
+                amount: 0,
                 paymentDate: savedPurchase.purchaseDate || new Date(),
-                paymentMethod: 'CASH', // Default
+                paymentMethod: 'OTHER', // Default
                 status: 'PENDING',
                 type: 'PURCHASE',
                 referenceNumber: `AUTO-${savedPurchase.invoiceNumber}`,
-                notes: `Auto-generated payment record for purchase ${savedPurchase.invoiceNumber}`
+                notes: `Auto-generated payment record for purchase ${savedPurchase.invoiceNumber}`,
+                history: []
             });
             await autoPayment.save();
 
@@ -80,8 +85,48 @@ export class PurchaseService {
         let filter: any = companyId ? { company: companyId } : {};
 
         if (search) {
+            const searchRegex = { $regex: search, $options: 'i' };
+            const companyFilter = companyId ? { company: companyId } : {};
+
+            // Searching by Vendor Name
+            const matchingVendors = await this.vendorModel.find({
+                name: searchRegex,
+                ...companyFilter
+            }).select('_id').exec();
+
+            // Searching by Product Name
+            const matchingProducts = await this.productModel.find({
+                name: searchRegex,
+                ...companyFilter
+            }).select('_id').exec();
+
+            // Searching by Serial Number
+            const matchingInventory = await this.inventoryModel.find({
+                serialNumber: searchRegex,
+                ...companyFilter
+            }).select('_id').exec();
+
+            const vendorIds = [
+                ...matchingVendors.map(v => v._id.toString()),
+                ...matchingVendors.map(v => new Types.ObjectId(v._id))
+            ];
+            const productIds = [
+                ...matchingProducts.map(p => p._id.toString()),
+                ...matchingProducts.map(p => new Types.ObjectId(p._id))
+            ];
+            const inventoryIds = [
+                ...matchingInventory.map(i => i._id.toString()),
+                ...matchingInventory.map(i => new Types.ObjectId(i._id))
+            ];
+
             filter.$or = [
-                { invoiceNumber: { $regex: search, $options: 'i' } }
+                { invoiceNumber: searchRegex },
+                { status: searchRegex },
+                { vendor: { $in: vendorIds } },
+                { 'items.product': { $in: productIds } },
+                { 'items.inventory': { $in: inventoryIds } },
+                { 'items.serialNumbers': searchRegex },
+                { 'items.serialNumbersODU': searchRegex }
             ];
         }
 

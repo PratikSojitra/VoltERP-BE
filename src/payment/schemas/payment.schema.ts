@@ -47,6 +47,16 @@ export class Payment extends Document {
     @Prop()
     notes: string;
 
+    @Prop([{
+        amount: { type: Number, required: true },
+        paymentDate: { type: Date, required: true },
+        paymentMethod: { type: String, required: true },
+        referenceNumber: { type: String },
+        notes: { type: String },
+        createdAt: { type: Date, default: Date.now }
+    }])
+    history: any[];
+
     @Prop({ type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true })
     company: Types.ObjectId | Company;
 }

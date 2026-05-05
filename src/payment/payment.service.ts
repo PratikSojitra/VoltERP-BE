@@ -22,13 +22,10 @@ export class PaymentService {
     private async syncInvoice(invoiceId: string | Types.ObjectId) {
         if (!invoiceId) return;
 
-        // Compute total paid for this invoice from COMPLETED / PARTIAL payments
-        const payments = await this.paymentModel.find({
-            invoice: invoiceId,
-            status: { $in: ['COMPLETED', 'PARTIAL'] }
-        });
-
-        const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+        // There should only be ONE payment record per invoice now.
+        const payment = await this.paymentModel.findOne({ invoice: invoiceId });
+        
+        const totalPaid = payment ? payment.amount : 0;
         const invoice = await this.invoiceModel.findById(invoiceId);
 
         if (!invoice) return;
@@ -46,56 +43,19 @@ export class PaymentService {
         invoice.outstandingAmount = outstandingAmount > 0 ? outstandingAmount : 0;
         invoice.status = status;
         await invoice.save();
-
-        const pendingPayment = await this.paymentModel.findOne({
-            invoice: invoiceId,
-            status: 'PENDING'
-        });
-
-        if (outstandingAmount > 0) {
-            if (pendingPayment) {
-                // Adjust existing pending to reflect exact new balance
-                pendingPayment.amount = outstandingAmount;
-                await pendingPayment.save();
-            } else {
-                // If it doesn't exist but we still owe balance, clone pending payment
-                const newPending = new this.paymentModel({
-                    invoice: invoice._id,
-                    customer: invoice.customer,
-                    company: invoice.company,
-                    amount: outstandingAmount,
-                    paymentDate: new Date(),
-                    paymentMethod: 'OTHER',
-                    status: 'PENDING',
-                    type: 'SALES',
-                    notes: 'Auto-updated pending balance due'
-                });
-                await newPending.save();
-            }
-        } else if (pendingPayment) {
-            // Drop any pending payments if they've fully paid
-            await this.paymentModel.findByIdAndDelete(pendingPayment._id);
-        }
     }
 
     private async syncPurchase(purchaseId: string | Types.ObjectId) {
         if (!purchaseId) return;
 
-        // Compute total paid for this purchase from COMPLETED / PARTIAL payments
-        const payments = await this.paymentModel.find({
-            purchase: purchaseId,
-            status: { $in: ['COMPLETED', 'PARTIAL'] }
-        });
-
-        const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+        const payment = await this.paymentModel.findOne({ purchase: purchaseId });
+        const totalPaid = payment ? payment.amount : 0;
         const purchase = await this.purchaseModel.findById(purchaseId);
 
         if (!purchase) return;
 
         const outstandingAmount = purchase.grandTotal - totalPaid;
 
-        // Purchase status is simpler but we'll use it to track inventory usually.
-        // We'll update the paidAmount and outstandingAmount.
         purchase.paidAmount = totalPaid;
         purchase.outstandingAmount = outstandingAmount > 0 ? outstandingAmount : 0;
         await purchase.save();
@@ -106,31 +66,55 @@ export class PaymentService {
             createPaymentDto.type = createPaymentDto.purchase ? 'PURCHASE' : 'SALES';
         }
 
-        const amount = createPaymentDto.amount;
-        const status = createPaymentDto.status;
         const invoiceId = createPaymentDto.invoice;
         const purchaseId = createPaymentDto.purchase;
 
-        if (amount && amount > 0 && (status === 'COMPLETED' || status === 'PARTIAL')) {
-            let outstanding = 0;
-            if (invoiceId) {
-                const invoice = await this.invoiceModel.findById(invoiceId);
-                if (invoice) outstanding = invoice.outstandingAmount || 0;
-            } else if (purchaseId) {
-                const purchase = await this.purchaseModel.findById(purchaseId);
-                if (purchase) outstanding = purchase.outstandingAmount || 0;
-            }
-
-            if (outstanding > 0) {
-                if (amount < outstanding) {
-                    createPaymentDto.status = 'PARTIAL';
-                } else if (amount >= outstanding) {
-                    createPaymentDto.status = 'COMPLETED';
-                }
+        // Check if a payment document already exists for this invoice/purchase
+        if (invoiceId || purchaseId) {
+            const query: any = {};
+            if (invoiceId) query.invoice = invoiceId;
+            if (purchaseId) query.purchase = purchaseId;
+            
+            const existing = await this.paymentModel.findOne(query).exec();
+            if (existing) {
+                return this.update(existing._id.toString(), createPaymentDto);
             }
         }
 
-        const createdPayment = new this.paymentModel(createPaymentDto);
+        const amount = createPaymentDto.amount || 0;
+        let outstanding = 0;
+        
+        if (invoiceId) {
+            const invoice = await this.invoiceModel.findById(invoiceId);
+            if (invoice) outstanding = invoice.grandTotal || 0;
+        } else if (purchaseId) {
+            const purchase = await this.purchaseModel.findById(purchaseId);
+            if (purchase) outstanding = purchase.grandTotal || 0;
+        }
+
+        if (outstanding > 0) {
+            if (amount === 0) createPaymentDto.status = 'PENDING';
+            else if (amount < outstanding) createPaymentDto.status = 'PARTIAL';
+            else createPaymentDto.status = 'COMPLETED';
+        }
+
+        // Create the initial history record if an amount was provided
+        const history: any[] = [];
+        if (amount > 0) {
+            history.push({
+                amount: amount,
+                paymentDate: createPaymentDto.paymentDate || new Date(),
+                paymentMethod: createPaymentDto.paymentMethod || 'OTHER',
+                referenceNumber: createPaymentDto.referenceNumber,
+                notes: createPaymentDto.notes
+            });
+        }
+
+        const createdPayment = new this.paymentModel({
+            ...createPaymentDto,
+            history
+        });
+        
         const saved = await createdPayment.save();
         if (saved.invoice) await this.syncInvoice(saved.invoice);
         if (saved.purchase) await this.syncPurchase(saved.purchase);
@@ -253,47 +237,49 @@ export class PaymentService {
             throw new NotFoundException(`Payment record with ID "${id}" not found`);
         }
 
-        const amount = updatePaymentDto.amount !== undefined ? updatePaymentDto.amount : existingPayment.amount;
-        const status = updatePaymentDto.status || existingPayment.status;
-        const invoiceId = updatePaymentDto.invoice || existingPayment.invoice;
-        const purchaseId = updatePaymentDto.purchase || existingPayment.purchase;
-
-        if (amount > 0 && (status === 'COMPLETED' || status === 'PARTIAL')) {
-            let outstanding = 0;
-            if (invoiceId) {
-                const invoice = await this.invoiceModel.findById(invoiceId);
-                if (invoice) {
-                    outstanding = invoice.outstandingAmount || 0;
-                    if (existingPayment.status === 'COMPLETED' || existingPayment.status === 'PARTIAL') {
-                        outstanding += existingPayment.amount;
-                    }
-                }
-            } else if (purchaseId) {
-                const purchase = await this.purchaseModel.findById(purchaseId);
-                if (purchase) {
-                    outstanding = purchase.outstandingAmount || 0;
-                    if (existingPayment.status === 'COMPLETED' || existingPayment.status === 'PARTIAL') {
-                        outstanding += existingPayment.amount;
-                    }
-                }
-            }
-
-            if (outstanding > 0) {
-                if (amount < outstanding) updatePaymentDto.status = 'PARTIAL';
-                else if (amount >= outstanding) updatePaymentDto.status = 'COMPLETED';
-            }
+        const partialAmount = updatePaymentDto.amount || 0;
+        
+        if (partialAmount > 0) {
+            existingPayment.history.push({
+                amount: partialAmount,
+                paymentDate: updatePaymentDto.paymentDate || new Date(),
+                paymentMethod: updatePaymentDto.paymentMethod || 'OTHER',
+                referenceNumber: updatePaymentDto.referenceNumber,
+                notes: updatePaymentDto.notes
+            });
+            
+            existingPayment.amount += partialAmount;
+            existingPayment.paymentDate = updatePaymentDto.paymentDate ? new Date(updatePaymentDto.paymentDate) : new Date();
+            existingPayment.paymentMethod = updatePaymentDto.paymentMethod || 'OTHER';
+            existingPayment.referenceNumber = updatePaymentDto.referenceNumber || '';
+            existingPayment.notes = updatePaymentDto.notes || '';
         }
 
-        const updatedPayment = await this.paymentModel
-            .findByIdAndUpdate(id, updatePaymentDto, { new: true })
-            .exec();
+        const totalAmount = existingPayment.amount;
+        let outstanding = 0;
+        const invoiceId = existingPayment.invoice;
+        const purchaseId = existingPayment.purchase;
 
-        // Note: existingPayment variable used above might be stale after findByIdAndUpdate, 
-        // but sync functions use updatedPayment references correctly.
+        if (invoiceId) {
+            const invoice = await this.invoiceModel.findById(invoiceId);
+            if (invoice) outstanding = invoice.grandTotal;
+        } else if (purchaseId) {
+            const purchase = await this.purchaseModel.findById(purchaseId);
+            if (purchase) outstanding = purchase.grandTotal;
+        }
+
+        if (outstanding > 0) {
+            if (totalAmount === 0) existingPayment.status = 'PENDING';
+            else if (totalAmount < outstanding) existingPayment.status = 'PARTIAL';
+            else existingPayment.status = 'COMPLETED';
+        }
+
+        const updatedPayment = await existingPayment.save();
+
         if (updatedPayment && updatedPayment.invoice) await this.syncInvoice(updatedPayment.invoice);
         if (updatedPayment && updatedPayment.purchase) await this.syncPurchase(updatedPayment.purchase);
         
-        return updatedPayment!;
+        return updatedPayment;
     }
 
     async remove(id: string): Promise<Payment> {
